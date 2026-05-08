@@ -19,5 +19,12 @@
     "doc_description": "This document is a comprehensive installation and operation manual for the ACF5000 multi-component FTIR emission monitoring system, detailing safety instructions, system components, installation procedures, commissioning, maintenance, and shutdown protocols, with a strong emphasis on compliance with safety standards and proper handling of hazardous gases and equipment.",
     "path": "/Users/timaltendorf/Documents/summetix/PageIndex/examples/documents/abb_manual.pdf",
     "page_count": 68
+  },
+  "cbeb1f61-a5af-5adb-82c4-0526b9562683": {
+    "type": "pdf",
+    "doc_name": "DS_ACF5000_EN_L.pdf",
+    "doc_description": "This document is a comprehensive technical datasheet for the ABB ACF5000 multi-component FTIR emission monitoring system, detailing its design, operational parameters, safety requirements, and compliance with environmental regulations, with a focus on its use in industrial applications such as waste incineration and power plants.",
+    "path": "/data/repos/PageIndex/examples/documents/DS_ACF5000_EN_L.pdf",
+    "page_count": 20
   }
 }

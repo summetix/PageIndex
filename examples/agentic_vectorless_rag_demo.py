@@ -27,7 +27,7 @@ import concurrent.futures
 import os
 from pathlib import Path
 import requests
-
+import uuid
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents import Agent, Runner, function_tool, set_tracing_disabled
@@ -44,12 +44,13 @@ import pageindex.utils as utils
 # PDF_URL = "https://library.e.abb.com/public/c82ebba1dc5e4d8eadadb3b199e1953d/41_23-820-EN_A.pdf"
 
 _EXAMPLES_DIR = Path(__file__).parent
-PDF_PATH = _EXAMPLES_DIR / "documents" / "abb_manual.pdf"
+PDF_PATH = _EXAMPLES_DIR / "documents" / "DS_ACF5000_EN_L.pdf"
 WORKSPACE = _EXAMPLES_DIR / "workspace"
 STRUCTURE_MODE_TOP_LEVEL = "top_level"
 STRUCTURE_MODE_CHILDREN = "children"
 STRUCTURE_MODE = STRUCTURE_MODE_CHILDREN
 STRUCTURE_TOKEN_LIMIT = 5000
+PAGEINDEX_NAMESPACE = uuid.UUID("7a4e0f52-2f3c-4c41-8a4e-6b9e8f3a2b11")
 
 TOP_LEVEL_AGENT_SYSTEM_PROMPT = """
 You are PageIndex, a document QA assistant.
@@ -98,7 +99,7 @@ def query_agent(
     """
 
     @function_tool
-    def get_document() -> str:
+    def get_document(dummy: str = "") -> str:
         """Get document metadata: status, page count, name, and description."""
         return client.get_document(doc_id)
 
@@ -132,7 +133,7 @@ def query_agent(
     else:
 
         @function_tool
-        def get_document_structure() -> str:
+        def get_document_structure(dummy: str = "") -> str:
             """
             Get the top-level outline.
             Each node includes has_children for recursive expansion decisions.
@@ -159,7 +160,10 @@ def query_agent(
         instructions=agent_instructions,
         tools=tools,
         model=client.retrieve_model,
-        # model_settings=ModelSettings(reasoning={"effort": "low", "summary": "auto"}),  # Uncomment to enable reasoning
+        #model_settings=ModelSettings(
+        #    parallel_tool_calls=False,
+        #),
+        #model_settings=ModelSettings(reasoning={"effort": "low", "summary": "auto"}),  # Uncomment to enable reasoning
     )
 
     async def _run():
@@ -219,7 +223,7 @@ if __name__ == "__main__":
     # Optional: route requests to an OpenAI-compatible endpoint.
     # Example:
     #   PAGEINDEX_OPENAI_BASE_URL=https://qwen3vl30b.gc.example.com/v1
-    #   PAGEINDEX_MODEL=QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ
+    #   PAGEINDEX_MODEL=hosted_vllm/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ
     openai_base_url = os.getenv("PAGEINDEX_OPENAI_BASE_URL")
     if openai_base_url:
         os.environ["OPENAI_BASE_URL"] = openai_base_url.rstrip("/")
@@ -260,7 +264,7 @@ if __name__ == "__main__":
     if doc_id:
         print(f"\nLoaded cached doc_id: {doc_id}")
     else:
-        doc_id = client.index(PDF_PATH)
+        doc_id = client.index(PDF_PATH, PAGEINDEX_NAMESPACE)
         print(f"\nIndexed. doc_id: {doc_id}")
     print("\nTree Structure (top-level sections):")
     structure = json.loads(client.get_document_structure(doc_id))
@@ -277,7 +281,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Step 3: Agent Query (auto tool-use)")
     print("=" * 60)
-    question = "What do i do after i unscrew the filter housing for the compressed air regulator and remove it? What needs to be done before that?"
+    question = "Was ist der zulässige Drift für den O2 Sensor im ACF5000?"
     # question = "What do i do to properly pack the system?"
     print(f"\nQuestion: '{question}'")
     query_agent(client, doc_id, question, verbose=True)

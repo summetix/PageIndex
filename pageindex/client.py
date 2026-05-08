@@ -66,7 +66,11 @@ class PageIndexClient:
         if self.workspace:
             self._load_workspace()
 
-    def index(self, file_path: str, mode: str = "auto") -> str:
+    def doc_id_from_filename(self, path_or_filename: str, pageindex_namespace: str) -> str:
+        filename = Path(path_or_filename).name.strip().lower()
+        return str(uuid.uuid5(pageindex_namespace, filename))
+
+    def index(self, file_path: str, pageindex_namespace: str, mode: str = "auto") -> str:
         """Index a document. Returns a document_id."""
         # Persist a canonical absolute path so workspace reloads do not
         # reinterpret caller-relative paths against the workspace directory.
@@ -74,8 +78,8 @@ class PageIndexClient:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        doc_id = str(uuid.uuid4())
         ext = os.path.splitext(file_path)[1].lower()
+        doc_id = self.doc_id_from_filename(os.path.basename(file_path), pageindex_namespace)
 
         is_pdf = ext == ".pdf"
         is_md = ext in [".md", ".markdown"]

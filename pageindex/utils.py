@@ -283,6 +283,7 @@ async def llm_acompletion(model, prompt):
     max_retries = 10
     messages = [{"role": "user", "content": prompt}]
     last_error = None
+    #litellm._turn_on_debug()
     for i in range(max_retries):
         try:
             response = await litellm.acompletion(

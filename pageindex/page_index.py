@@ -1381,10 +1381,11 @@ def page_index(
     if_add_doc_description=None,
     if_add_node_text=None,
 ):
+    local_vars = dict(locals())  # snapshot
 
     user_opt = {
         arg: value
-        for arg, value in locals().items()
+        for arg, value in local_vars.items()
         if arg != "doc" and value is not None
     }
     opt = ConfigLoader().load(user_opt)
