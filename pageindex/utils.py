@@ -649,6 +649,9 @@ def extract_embedded_toc(doc_path):
         return None
 
     try:
+        if not doc.get_toc(simple=True):
+            return None
+
         outline_root = getattr(doc, "outline", None)
         if outline_root is None:
             return None
@@ -693,6 +696,8 @@ def extract_embedded_toc(doc_path):
 
         walk_outline(outline_root, [1])
         return toc_items if toc_items else None
+    except Exception as e:
+        print(str(e))
     finally:
         doc.close()
 

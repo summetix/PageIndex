@@ -29,7 +29,7 @@ from pathlib import Path
 import requests
 import uuid
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from tqdm import tqdm
 from agents import Agent, Runner, function_tool, set_tracing_disabled
 from agents.model_settings import ModelSettings
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
@@ -44,8 +44,6 @@ import pageindex.utils as utils
 # PDF_URL = "https://library.e.abb.com/public/c82ebba1dc5e4d8eadadb3b199e1953d/41_23-820-EN_A.pdf"
 
 _EXAMPLES_DIR = Path(__file__).parent
-PDF_PATH = _EXAMPLES_DIR / "documents" / "DS_ACF5000_EN_L.pdf"
-WORKSPACE = _EXAMPLES_DIR / "workspace"
 STRUCTURE_MODE_TOP_LEVEL = "top_level"
 STRUCTURE_MODE_CHILDREN = "children"
 STRUCTURE_MODE = STRUCTURE_MODE_CHILDREN
@@ -216,8 +214,7 @@ def query_agent(
         return asyncio.run(_run())
 
 
-if __name__ == "__main__":
-
+def main(PDF_PATH: Path):
     set_tracing_disabled(True)
 
     # Optional: route requests to an OpenAI-compatible endpoint.
@@ -278,10 +275,21 @@ if __name__ == "__main__":
     print(f"\n{doc_metadata}")
 
     # Step 3: Agent Query
-    print("\n" + "=" * 60)
-    print("Step 3: Agent Query (auto tool-use)")
-    print("=" * 60)
-    question = "Was ist der zulässige Drift für den O2 Sensor im ACF5000?"
+    #print("\n" + "=" * 60)
+    #print("Step 3: Agent Query (auto tool-use)")
+    #print("=" * 60)
+    #question = "Was ist der zulässige Drift für den O2 Sensor im ACF5000?"
     # question = "What do i do to properly pack the system?"
-    print(f"\nQuestion: '{question}'")
-    query_agent(client, doc_id, question, verbose=True)
+    #print(f"\nQuestion: '{question}'")
+    #query_agent(client, doc_id, question, verbose=True)
+
+if __name__ == "__main__":
+    WORKSPACE = _EXAMPLES_DIR / "result"  # out dir
+    in_path = _EXAMPLES_DIR / "pdf_open"
+    dir_list = os.listdir(in_path)
+    for f in tqdm(dir_list, total=len(dir_list), desc="Files parsed"):
+        PDF_PATH = in_path / f
+        print("\n#################################################################")
+        print(f"# Processing: {PDF_PATH}")
+        print("#################################################################")
+        main(PDF_PATH)
