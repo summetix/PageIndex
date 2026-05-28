@@ -4,8 +4,10 @@ import json
 import asyncio
 import concurrent.futures
 from pathlib import Path
-
+import re
+from datetime import datetime, timezone, timedelta
 import PyPDF2
+import pymupdf
 
 from .page_index import page_index
 from .page_index_md import md_to_tree
@@ -19,6 +21,16 @@ from .utils import ConfigLoader, remove_fields
 
 META_INDEX = "_meta.json"
 
+PDF_DATE_RE = re.compile(
+    r"^D:"
+    r"(?P<year>\d{4})"
+    r"(?P<month>\d{2})?"
+    r"(?P<day>\d{2})?"
+    r"(?P<hour>\d{2})?"
+    r"(?P<minute>\d{2})?"
+    r"(?P<second>\d{2})?"
+    r"(?P<tz>Z|[+-]\d{2}'?\d{2}'?)?"
+)
 
 def _normalize_retrieve_model(model: str) -> str:
     """Preserve supported Agents SDK prefixes and route other provider paths via LiteLLM."""
@@ -70,6 +82,114 @@ class PageIndexClient:
         filename = Path(path_or_filename).name.strip().lower()
         return str(uuid.uuid5(pageindex_namespace, filename))
 
+
+    def parse_pdf_date(self, value: str | None) -> datetime | None:
+        """
+        Parses PDF dates like:
+          D:20240131153000+01'00'
+          D:20240131153000Z
+          D:20240131153000
+        Returns UTC datetime.
+        """
+        if not value:
+            return None
+
+        value = value.strip()
+        match = PDF_DATE_RE.match(value)
+        if not match:
+            return None
+
+        parts = match.groupdict()
+
+        try:
+            year = int(parts["year"])
+            month = int(parts["month"] or 1)
+            day = int(parts["day"] or 1)
+            hour = int(parts["hour"] or 0)
+            minute = int(parts["minute"] or 0)
+            second = int(parts["second"] or 0)
+        except ValueError:
+            return None
+
+        tz_value = parts.get("tz")
+
+        if tz_value == "Z":
+            tzinfo = timezone.utc
+        elif tz_value and (tz_value.startswith("+") or tz_value.startswith("-")):
+            sign = 1 if tz_value[0] == "+" else -1
+            digits = tz_value[1:].replace("'", "")
+
+            if len(digits) != 4:
+                tzinfo = timezone.utc
+            else:
+                offset_hours = int(digits[:2])
+                offset_minutes = int(digits[2:])
+                tzinfo = timezone(
+                    sign * timedelta(hours=offset_hours, minutes=offset_minutes)
+                )
+        else:
+            # If PDF metadata has no timezone, choose one consistent convention.
+            # UTC is usually safest for indexing.
+            tzinfo = timezone.utc
+
+        try:
+            return datetime(
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                tzinfo=tzinfo,
+            ).astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    def format_timestamp_utc(self, dt: datetime) -> str:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        return dt.astimezone(timezone.utc).strftime(os.getenv("FORMAT_SOURCE_TIMESTAMP", "%Y-%m-%dT%H:%M:%SZ"))
+
+    def infer_timestamp_from_file(self, file_path: str) -> tuple[str, str]:
+        """
+        Infer a stable timestamp from the file itself.
+
+        Priority:
+          1. PDF creationDate metadata
+          2. PDF modDate metadata
+          3. filesystem mtime fallback
+
+        Returns:
+          (timestamp_iso_utc, source)
+        """
+        file_path = os.path.abspath(os.path.expanduser(file_path))
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == ".pdf":
+            try:
+                doc = pymupdf.open(file_path)
+                try:
+                    metadata = doc.metadata or {}
+
+                    creation_date = self.parse_pdf_date(metadata.get("creationDate"))
+                    if creation_date is not None:
+                        return creation_date.isoformat(), "pdf.creationDate"
+
+                    modification_date = self.parse_pdf_date(metadata.get("modDate"))
+                    if modification_date is not None:
+                        return modification_date.isoformat(), "pdf.modDate"
+
+                finally:
+                    doc.close()
+
+            except Exception:
+                pass
+
+        mtime = os.path.getmtime(file_path)
+        fallback_dt = datetime.fromtimestamp(mtime, timezone.utc)
+        return self.format_timestamp_utc(fallback_dt), "filesystem.mtime"
+
     def index(self, file_path: str, pageindex_namespace: str, mode: str = "auto") -> str:
         """Index a document. Returns a document_id."""
         # Persist a canonical absolute path so workspace reloads do not
@@ -77,6 +197,8 @@ class PageIndexClient:
         file_path = os.path.abspath(os.path.expanduser(file_path))
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
+
+        document_timestamp, timestamp_source = self.infer_timestamp_from_file(file_path)
 
         ext = os.path.splitext(file_path)[1].lower()
         doc_id = self.doc_id_from_filename(os.path.basename(file_path), pageindex_namespace)
@@ -105,6 +227,7 @@ class PageIndexClient:
                 "id": doc_id,
                 "type": "pdf",
                 "path": file_path,
+                "timestamp": document_timestamp,
                 "doc_name": result.get("doc_name", ""),
                 "doc_description": result.get("doc_description", ""),
                 "page_count": len(pages),
@@ -134,6 +257,7 @@ class PageIndexClient:
                 "id": doc_id,
                 "type": "md",
                 "path": file_path,
+                "timestamp": document_timestamp,
                 "doc_name": result.get("doc_name", ""),
                 "doc_description": result.get("doc_description", ""),
                 "line_count": result.get("line_count", 0),

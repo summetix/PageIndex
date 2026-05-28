@@ -287,6 +287,7 @@ if __name__ == "__main__":
     WORKSPACE = _EXAMPLES_DIR / "result"  # out dir
     in_path = _EXAMPLES_DIR / "pdf_open"
     dir_list = os.listdir(in_path)
+    FORMAT_SOURCE_TIMESTAMP = os.getenv("FORMAT_SOURCE_TIMESTAMP", "%Y-%m-%dT%H:%M:%SZ")
     for f in tqdm(dir_list, total=len(dir_list), desc="Files parsed"):
         PDF_PATH = in_path / f
         print("\n#################################################################")
