@@ -15,22 +15,128 @@ import asyncio
 import pymupdf
 from io import BytesIO
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 load_dotenv()
 import logging
 import yaml
 from pathlib import Path
 from types import SimpleNamespace as config
+import sys
 
 # Backward compatibility: support CHATGPT_API_KEY as alias for OPENAI_API_KEY
 if not os.getenv("OPENAI_API_KEY") and os.getenv("CHATGPT_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("CHATGPT_API_KEY")
+
+PAGEINDEX_LLM_CONCURRENCY = int(os.getenv("PAGEINDEX_LLM_CONCURRENCY", "1"))
+_PAGEINDEX_LLM_SEMAPHORE = asyncio.Semaphore(PAGEINDEX_LLM_CONCURRENCY)
+
+# Optional guessed total. Set env var if you want:
+# PAGEINDEX_LLM_PROGRESS_TOTAL=128
+_PAGEINDEX_LLM_PROGRESS_TOTAL = None
+_PAGEINDEX_LLM_PROGRESS_TOTAL = (
+    int(_PAGEINDEX_LLM_PROGRESS_TOTAL)
+    if _PAGEINDEX_LLM_PROGRESS_TOTAL
+    else None
+)
+
+_PAGEINDEX_PROGRESS_LOCK = threading.Lock()
+_PAGEINDEX_LLM_PROGRESS = tqdm(
+    total=_PAGEINDEX_LLM_PROGRESS_TOTAL,
+    desc="PageIndex LLM calls",
+    unit="call",
+    file=sys.stdout,      # or sys.stderr, but be consistent
+    dynamic_ncols=True,
+    leave=True,
+    mininterval=0.5,      # don't redraw too often
+    position=0,
+)
+_PAGEINDEX_LLM_DONE = 0
+_PAGEINDEX_LLM_RUNNING = 0
+_PAGEINDEX_LLM_CREATED = 0
+
 
 litellm.drop_params = True
 
 
 _LLM_TRACE_LOCAL = threading.local()
 
+
+def set_pageindex_llm_progress_total(total: int | None) -> None:
+    global _PAGEINDEX_LLM_PROGRESS_TOTAL
+
+    with _PAGEINDEX_PROGRESS_LOCK:
+        _PAGEINDEX_LLM_PROGRESS_TOTAL = total
+
+        if _PAGEINDEX_LLM_PROGRESS is not None:
+            _PAGEINDEX_LLM_PROGRESS.total = total
+            _PAGEINDEX_LLM_PROGRESS.refresh()
+
+def _ensure_llm_progress() -> None:
+    global _PAGEINDEX_LLM_PROGRESS
+
+    if _PAGEINDEX_LLM_PROGRESS is None:
+        _PAGEINDEX_LLM_PROGRESS = tqdm(
+            total=_PAGEINDEX_LLM_PROGRESS_TOTAL,
+            desc="PageIndex LLM calls",
+            unit="call",
+        )
+
+
+def _refresh_llm_progress() -> None:
+    if _PAGEINDEX_LLM_PROGRESS is None:
+        return
+
+    queued = max(
+        _PAGEINDEX_LLM_CREATED - _PAGEINDEX_LLM_DONE - _PAGEINDEX_LLM_RUNNING,
+        0,
+    )
+
+    _PAGEINDEX_LLM_PROGRESS.set_postfix(
+        {
+            "created": _PAGEINDEX_LLM_CREATED,
+            "done": _PAGEINDEX_LLM_DONE,
+            "running": _PAGEINDEX_LLM_RUNNING,
+            "queued": queued,
+        },
+        refresh=True,
+    )
+
+
+def _mark_llm_created() -> None:
+    global _PAGEINDEX_LLM_CREATED
+
+    with _PAGEINDEX_PROGRESS_LOCK:
+        _ensure_llm_progress()
+        _PAGEINDEX_LLM_CREATED += 1
+        _refresh_llm_progress()
+
+
+def _mark_llm_started() -> None:
+    global _PAGEINDEX_LLM_RUNNING
+
+    with _PAGEINDEX_PROGRESS_LOCK:
+        _ensure_llm_progress()
+        _PAGEINDEX_LLM_RUNNING += 1
+        _refresh_llm_progress()
+
+
+def _mark_llm_stopped() -> None:
+    global _PAGEINDEX_LLM_RUNNING
+
+    with _PAGEINDEX_PROGRESS_LOCK:
+        _PAGEINDEX_LLM_RUNNING = max(_PAGEINDEX_LLM_RUNNING - 1, 0)
+        _refresh_llm_progress()
+
+
+def _mark_llm_finished() -> None:
+    global _PAGEINDEX_LLM_DONE
+
+    with _PAGEINDEX_PROGRESS_LOCK:
+        _ensure_llm_progress()
+        _PAGEINDEX_LLM_DONE += 1
+        _PAGEINDEX_LLM_PROGRESS.update(1)
+        _refresh_llm_progress()
 
 def _llm_debug_enabled():
     value = os.getenv("LLM_DEBUG", "")
@@ -280,44 +386,60 @@ def llm_completion(model, prompt, chat_history=None, return_finish_reason=False)
 async def llm_acompletion(model, prompt):
     if model:
         model = model.removeprefix("litellm/")
+
     max_retries = 10
     messages = [{"role": "user", "content": prompt}]
     last_error = None
-    #litellm._turn_on_debug()
-    for i in range(max_retries):
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                temperature=0,
-            )
-            content = response.choices[0].message.content
-            _write_llm_trace_file(
-                messages=messages,
-                response=content,
-                model=model,
-                is_async=True,
-                retries=i,
-            )
-            return content
-        except Exception as e:
-            last_error = e
-            print("************* Retrying *************")
-            logging.error(f"Error: {e}")
-            if i < max_retries - 1:
-                await asyncio.sleep(1)
-            else:
-                logging.error("Max retries reached for prompt: " + prompt)
+
+    _mark_llm_created()
+
+    try:
+        for i in range(max_retries):
+            try:
+                async with _PAGEINDEX_LLM_SEMAPHORE:
+                    _mark_llm_started()
+                    try:
+                        response = await litellm.acompletion(
+                            model=model,
+                            messages=messages,
+                            temperature=0,
+                        )
+                    finally:
+                        _mark_llm_stopped()
+
+                content = response.choices[0].message.content
+
                 _write_llm_trace_file(
                     messages=messages,
-                    response="",
+                    response=content,
                     model=model,
                     is_async=True,
-                    retries=max_retries,
-                    error=str(last_error),
+                    retries=i,
                 )
-                return ""
 
+                return content
+
+            except Exception as e:
+                last_error = e
+                print("************* Retrying *************")
+                logging.error(f"Error: {e}")
+
+                if i < max_retries - 1:
+                    await asyncio.sleep(1)
+                else:
+                    logging.error("Max retries reached for prompt: " + prompt)
+                    _write_llm_trace_file(
+                        messages=messages,
+                        response="",
+                        model=model,
+                        is_async=True,
+                        retries=max_retries,
+                        error=str(last_error),
+                    )
+                    return ""
+
+    finally:
+        _mark_llm_finished()
 
 def get_json_content(response):
     start_idx = response.find("```json")

@@ -1232,6 +1232,31 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
     return node
 
 
+def estimate_tree_node_count(nodes) -> int:
+    total = 0
+
+    def walk(node):
+        nonlocal total
+        total += 1
+
+        children = (
+            node.get("children")
+            or node.get("subsections")
+            or node.get("nodes")
+            or []
+        )
+
+        for child in children:
+            if isinstance(child, dict):
+                walk(child)
+
+    for node in nodes:
+        if isinstance(node, dict):
+            walk(node)
+
+    return total
+
+
 async def tree_parser(page_list, opt, doc=None, logger=None):
     fast_toc = extract_embedded_toc(doc)
 
@@ -1282,6 +1307,10 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
         ]
 
     toc_tree = post_processing(valid_toc_items, len(page_list))
+
+    estimated_llm_calls = max(estimate_tree_node_count(toc_tree), 1)
+    set_pageindex_llm_progress_total(estimated_llm_calls)
+
     tasks = [
         process_large_node_recursively(node, page_list, opt, logger=logger)
         for node in toc_tree
